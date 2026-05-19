@@ -1,0 +1,158 @@
+version: '3.8'
+
+networks:
+  sre-overlay:
+    driver: overlay
+    attachable: true
+
+volumes:
+  postgres-swarm-data:
+  prometheus-swarm-data:
+  grafana-swarm-data:
+  redis-swarm-data:
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: sre_db
+      POSTGRES_USER: sre_user
+      POSTGRES_PASSWORD: sre_password
+    volumes:
+      - postgres-swarm-data:/var/lib/postgresql/data
+    networks: [sre-overlay]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-swarm-data:/data
+    networks: [sre-overlay]
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  auth-service:
+    image: sre-auth-service:latest
+    environment:
+      - PORT=5001
+      - DB_HOST=postgres
+    networks: [sre-overlay]
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  product-service:
+    image: sre-product-service:latest
+    environment: [PORT=5002, DB_HOST=postgres]
+    networks: [sre-overlay]
+    deploy:
+      replicas: 2
+      update_config: {parallelism: 1, delay: 10s, failure_action: rollback, order: start-first}
+      restart_policy: {condition: on-failure, delay: 5s, max_attempts: 3}
+      resources: {limits: {cpus: '0.5', memory: 128M}}
+
+  order-service:
+    image: sre-order-service:latest
+    environment: [PORT=5003, DB_HOST=postgres, REDIS_HOST=redis]
+    networks: [sre-overlay]
+    deploy:
+      replicas: 3
+      update_config: {parallelism: 1, delay: 10s, failure_action: rollback, order: start-first}
+      restart_policy: {condition: on-failure, delay: 5s, max_attempts: 3}
+      resources: {limits: {cpus: '1.0', memory: 256M}, reservations: {cpus: '0.2', memory: 128M}}
+
+  payment-service:
+    image: sre-payment-service:latest
+    environment: [PORT=5004, DB_HOST=postgres]
+    networks: [sre-overlay]
+    deploy:
+      replicas: 2
+      update_config: {parallelism: 1, delay: 10s, failure_action: rollback}
+      restart_policy: {condition: on-failure, delay: 5s, max_attempts: 3}
+      resources: {limits: {cpus: '0.5', memory: 256M}}
+
+  notification-service:
+    image: sre-notification-service:latest
+    environment: [PORT=5005]
+    networks: [sre-overlay]
+    deploy:
+      replicas: 1
+      restart_policy: {condition: on-failure}
+      resources: {limits: {cpus: '0.25', memory: 128M}}
+
+  user-profile-service:
+    image: sre-user-profile-service:latest
+    environment: [PORT=5006, DB_HOST=postgres]
+    networks: [sre-overlay]
+    deploy:
+      replicas: 2
+      update_config: {parallelism: 1, delay: 10s}
+      restart_policy: {condition: on-failure, delay: 5s}
+      resources: {limits: {cpus: '0.5', memory: 128M}}
+
+  frontend:
+    image: sre-frontend:latest
+    ports: ["80:80"]
+    networks: [sre-overlay]
+    deploy:
+      replicas: 1
+      restart_policy: {condition: on-failure}
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports: ["9090:9090"]
+    volumes:
+      - prometheus-swarm-data:/prometheus
+    networks: [sre-overlay]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+
+  grafana:
+    image: grafana/grafana:latest
+    ports: ["3000:3000"]
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=sre_admin
+    volumes:
+      - grafana-swarm-data:/var/lib/grafana
+    networks: [sre-overlay]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]

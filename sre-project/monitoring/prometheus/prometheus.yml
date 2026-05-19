@@ -1,0 +1,61 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    environment: 'production'
+    project: 'sre-microservices'
+
+rule_files:
+  - "alert_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    metrics_path: /metrics
+
+  - job_name: 'auth-service'
+    static_configs:
+      - targets: ['auth-service:5001']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  - job_name: 'product-service'
+    static_configs:
+      - targets: ['product-service:5002']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  - job_name: 'order-service'
+    static_configs:
+      - targets: ['order-service:5003']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  - job_name: 'payment-service'
+    static_configs:
+      - targets: ['payment-service:5004']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  - job_name: 'notification-service'
+    static_configs:
+      - targets: ['notification-service:5005']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  - job_name: 'user-profile-service'
+    static_configs:
+      - targets: ['user-profile-service:5006']
+    metrics_path: /metrics
+    scrape_interval: 10s

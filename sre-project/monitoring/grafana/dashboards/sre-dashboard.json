@@ -1,0 +1,126 @@
+{
+  "title": "SRE Microservices Dashboard",
+  "uid": "sre-main",
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Services Up",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "count(up{job=~\".*-service\"} == 1)",
+        "legendFormat": "Up"
+      }],
+      "options": { "colorMode": "background" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{"color": "red", "value": 0}, {"color": "green", "value": 6}] } } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Availability SLO",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "(count(up{job=~\".*-service\"} == 1) / count(up{job=~\".*-service\"})) * 100",
+        "legendFormat": "Availability %"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "steps": [{"color": "red", "value": 0}, {"color": "yellow", "value": 95}, {"color": "green", "value": 99}] } } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Request Rate (RPS)",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "sum(rate(order_requests_total[5m])) + sum(rate(auth_requests_total[5m])) + sum(rate(product_requests_total[5m]))",
+        "legendFormat": "req/s"
+      }],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Order Error Rate",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "sum(rate(order_requests_total{status=~\"5..\"}[5m])) / sum(rate(order_requests_total[5m])) * 100",
+        "legendFormat": "Error %"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 0.5}, {"color": "red", "value": 1}] } } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Request Rate per Service",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(auth_requests_total[5m]))", "legendFormat": "auth-service" },
+        { "expr": "sum(rate(product_requests_total[5m]))", "legendFormat": "product-service" },
+        { "expr": "sum(rate(order_requests_total[5m]))", "legendFormat": "order-service" },
+        { "expr": "sum(rate(payment_requests_total[5m]))", "legendFormat": "payment-service" },
+        { "expr": "sum(rate(notification_requests_total[5m]))", "legendFormat": "notification-service" },
+        { "expr": "sum(rate(userprofile_requests_total[5m]))", "legendFormat": "user-profile-service" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Error Rate (5xx) per Service",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(order_requests_total{status=~\"5..\"}[5m]))", "legendFormat": "order errors" },
+        { "expr": "sum(rate(payment_requests_total{status=~\"4..\"}[5m]))", "legendFormat": "payment failures" },
+        { "expr": "sum(rate(auth_requests_total{status=~\"4..\"}[5m]))", "legendFormat": "auth failures" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "p95 Latency per Service",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(order_request_latency_seconds_bucket[5m])) by (le))", "legendFormat": "order p95" },
+        { "expr": "histogram_quantile(0.95, sum(rate(auth_request_latency_seconds_bucket[5m])) by (le))", "legendFormat": "auth p95" },
+        { "expr": "histogram_quantile(0.95, sum(rate(payment_request_latency_seconds_bucket[5m])) by (le))", "legendFormat": "payment p95" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "CPU Usage",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "targets": [{
+        "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+        "legendFormat": "CPU %"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Memory Usage",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "targets": [{
+        "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+        "legendFormat": "Memory %"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Orders Created vs Failed",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "rate(orders_created_total[5m])", "legendFormat": "orders created/s" },
+        { "expr": "rate(orders_failed_total[5m])", "legendFormat": "orders failed/s" }
+      ]
+    }
+  ],
+  "schemaVersion": 38
+}

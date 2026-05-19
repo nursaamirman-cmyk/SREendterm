@@ -1,0 +1,194 @@
+version: '3.8'
+
+networks:
+  sre-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  grafana-data:
+  prometheus-data:
+  redis-data:
+
+services:
+  # ── Databases ──────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: sre-postgres
+    environment:
+      POSTGRES_DB: sre_db
+      POSTGRES_USER: sre_user
+      POSTGRES_PASSWORD: sre_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [sre-network]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sre_user -d sre_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: sre-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks: [sre-network]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Microservices ──────────────────────────────────────────
+  auth-service:
+    build: ./services/auth-service
+    container_name: sre-auth
+    ports: ["5001:5001"]
+    environment:
+      - PORT=5001
+      - DB_HOST=postgres
+      - DB_USER=sre_user
+      - DB_PASS=sre_password
+      - REDIS_HOST=redis
+    networks: [sre-network]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: unless-stopped
+
+  product-service:
+    build: ./services/product-service
+    container_name: sre-product
+    ports: ["5002:5002"]
+    environment:
+      - PORT=5002
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+    networks: [sre-network]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: unless-stopped
+
+  order-service:
+    build: ./services/order-service
+    container_name: sre-order
+    ports: ["5003:5003"]
+    environment:
+      - PORT=5003
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+    networks: [sre-network]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  payment-service:
+    build: ./services/payment-service
+    container_name: sre-payment
+    ports: ["5004:5004"]
+    environment:
+      - PORT=5004
+      - DB_HOST=postgres
+    networks: [sre-network]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: unless-stopped
+
+  notification-service:
+    build: ./services/notification-service
+    container_name: sre-notification
+    ports: ["5005:5005"]
+    environment:
+      - PORT=5005
+      - SMTP_HOST=localhost
+    networks: [sre-network]
+    restart: unless-stopped
+
+  user-profile-service:
+    build: ./services/user-profile-service
+    container_name: sre-userprofile
+    ports: ["5006:5006"]
+    environment:
+      - PORT=5006
+      - DB_HOST=postgres
+    networks: [sre-network]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: unless-stopped
+
+  # ── Frontend ───────────────────────────────────────────────
+  frontend:
+    build: ./frontend
+    container_name: sre-frontend
+    ports: ["80:80"]
+    networks: [sre-network]
+    depends_on:
+      - auth-service
+      - product-service
+      - order-service
+    restart: unless-stopped
+
+  # ── Monitoring ─────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: sre-prometheus
+    ports: ["9090:9090"]
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--storage.tsdb.retention.time=30d'
+    networks: [sre-network]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: sre-grafana
+    ports: ["3000:3000"]
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=sre_admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_DOMAIN=localhost
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    networks: [sre-network]
+    depends_on: [prometheus]
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: sre-alertmanager
+    ports: ["9093:9093"]
+    volumes:
+      - ./monitoring/prometheus:/etc/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+    networks: [sre-network]
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: sre-node-exporter
+    ports: ["9100:9100"]
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
+    networks: [sre-network]
+    restart: unless-stopped

@@ -1,0 +1,198 @@
+---
+# ─────────────────────────────────────────────────────────────
+# SRE Project — Ansible Configuration & Deployment Playbook
+# ─────────────────────────────────────────────────────────────
+
+- name: "SRE Environment Setup — Install Dependencies"
+  hosts: all
+  become: yes
+  vars:
+    docker_compose_version: "2.24.0"
+    project_dir: "/opt/sre-project"
+    docker_user: "{{ ansible_user }}"
+
+  tasks:
+    - name: Update apt package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+
+    - name: Install required system packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - git
+          - python3
+          - python3-pip
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Install Docker Engine
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+        state: present
+      notify: Start Docker
+
+    - name: Add user to docker group
+      user:
+        name: "{{ docker_user }}"
+        groups: docker
+        append: yes
+
+    - name: Install Docker Compose plugin
+      get_url:
+        url: "https://github.com/docker/compose/releases/download/v{{ docker_compose_version }}/docker-compose-linux-x86_64"
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+
+    - name: Install Python Docker SDK
+      pip:
+        name:
+          - docker
+          - docker-compose
+        state: present
+
+  handlers:
+    - name: Start Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+- name: "SRE Environment Setup — Deploy Application"
+  hosts: all
+  become: yes
+  vars:
+    project_dir: "/opt/sre-project"
+
+  tasks:
+    - name: Create project directory
+      file:
+        path: "{{ project_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy project files to server
+      synchronize:
+        src: "{{ playbook_dir }}/../"
+        dest: "{{ project_dir }}/"
+        delete: no
+        recursive: yes
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=__pycache__"
+          - "--exclude=*.pyc"
+
+    - name: Build Docker images
+      community.docker.docker_compose_v2:
+        project_src: "{{ project_dir }}"
+        build: always
+      register: build_output
+
+    - name: Start all services
+      community.docker.docker_compose_v2:
+        project_src: "{{ project_dir }}"
+        state: present
+      register: deploy_output
+
+    - name: Display deployment status
+      debug:
+        msg: "Deployment complete. Services started: {{ deploy_output.services | default([]) | length }}"
+
+- name: "SRE Environment Setup — Health Checks"
+  hosts: all
+  vars:
+    services:
+      - { name: "Auth Service",         url: "http://localhost:5001/health" }
+      - { name: "Product Service",       url: "http://localhost:5002/health" }
+      - { name: "Order Service",         url: "http://localhost:5003/health" }
+      - { name: "Payment Service",       url: "http://localhost:5004/health" }
+      - { name: "Notification Service",  url: "http://localhost:5005/health" }
+      - { name: "User Profile Service",  url: "http://localhost:5006/health" }
+      - { name: "Prometheus",            url: "http://localhost:9090/-/healthy" }
+      - { name: "Grafana",               url: "http://localhost:3000/api/health" }
+
+  tasks:
+    - name: Wait for services to be ready
+      pause:
+        seconds: 15
+
+    - name: Health check all services
+      uri:
+        url: "{{ item.url }}"
+        method: GET
+        status_code: 200
+        timeout: 10
+      loop: "{{ services }}"
+      register: health_results
+      retries: 5
+      delay: 5
+      ignore_errors: yes
+
+    - name: Report service health status
+      debug:
+        msg: "{{ item.item.name }}: {{ 'HEALTHY ✓' if item.status == 200 else 'UNHEALTHY ✗ (status: ' + item.status|string + ')' }}"
+      loop: "{{ health_results.results }}"
+
+- name: "SRE Environment Setup — Configure Monitoring Alerts"
+  hosts: all
+  become: yes
+  vars:
+    project_dir: "/opt/sre-project"
+
+  tasks:
+    - name: Reload Prometheus configuration
+      uri:
+        url: "http://localhost:9090/-/reload"
+        method: POST
+        status_code: [200, 204]
+      ignore_errors: yes
+
+    - name: Configure service restart policies
+      community.docker.docker_container_info:
+        name: "{{ item }}"
+      loop:
+        - sre-auth
+        - sre-product
+        - sre-order
+        - sre-payment
+        - sre-notification
+        - sre-userprofile
+      register: container_info
+      ignore_errors: yes
+
+    - name: Summary
+      debug:
+        msg: |
+          ✅ SRE Environment Setup Complete!
+          ──────────────────────────────────
+          Frontend:     http://localhost:80
+          Prometheus:   http://localhost:9090
+          Grafana:      http://localhost:3000
+          Auth API:     http://localhost:5001
+          Product API:  http://localhost:5002
+          Order API:    http://localhost:5003
+          Payment API:  http://localhost:5004
+          Notify API:   http://localhost:5005
+          Profile API:  http://localhost:5006

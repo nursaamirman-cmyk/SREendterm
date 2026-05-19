@@ -1,0 +1,130 @@
+groups:
+  - name: sre_slo_alerts
+    interval: 30s
+    rules:
+
+      # ── Availability SLO: service must be up ───────────────────────────
+      - alert: ServiceDown
+        expr: up{job=~".*-service"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "Service {{ $labels.job }} is DOWN"
+          description: "Service {{ $labels.job }} has been unreachable for more than 1 minute. SLO BREACH: Availability < 99%"
+          runbook: "https://github.com/your-repo/runbooks/service-down.md"
+
+      # ── High Error Rate: SLO breach > 1% ──────────────────────────────
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(order_requests_total{status=~"5.."}[5m])) by (job)
+            /
+            sum(rate(order_requests_total[5m])) by (job)
+          ) > 0.01
+        for: 2m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "High error rate on {{ $labels.job }}"
+          description: "Error rate is {{ $value | humanizePercentage }} — SLO breach: must be ≤ 1%"
+
+      - alert: HighErrorRateAny
+        expr: |
+          (
+            sum(rate(auth_requests_total{status=~"5.."}[5m])) > 0
+            or
+            sum(rate(payment_requests_total{status=~"5.."}[5m])) > 0
+          )
+        for: 2m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "Elevated 5xx errors detected"
+          description: "One or more services are returning 5xx errors"
+
+      # ── High Latency: SLO breach > 200ms ──────────────────────────────
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(order_request_latency_seconds_bucket[5m])) by (le, endpoint)
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "High latency on order-service (p95 > 200ms)"
+          description: "p95 latency is {{ $value }}s — SLO breach: must be ≤ 200ms"
+
+      # ── Order Service Database Issue ───────────────────────────────────
+      - alert: OrderServiceDegraded
+        expr: orders_failed_total > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "Order service is failing to create orders"
+          description: "orders_failed_total has been increasing — possible database connectivity issue"
+
+      # ── High CPU Usage ─────────────────────────────────────────────────
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value }}% — consider horizontal scaling"
+
+      # ── High Memory Usage ──────────────────────────────────────────────
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value }}% — consider vertical scaling or optimization"
+
+      # ── PostgreSQL Down ────────────────────────────────────────────────
+      - alert: PostgresDown
+        expr: up{job="postgres"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "PostgreSQL database is DOWN"
+          description: "Database unavailable — all data-dependent services will fail"
+
+  - name: sre_capacity_alerts
+    rules:
+      - alert: HighRequestRate
+        expr: |
+          sum(rate(order_requests_total[5m])) > 100
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "High request rate — consider scaling"
+          description: "Order service receiving {{ $value }} req/s. Scale replicas."
+
+      - alert: LowDiskSpace
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space: {{ $value }}% remaining"
+          description: "Disk space is critically low. Clean up logs or expand storage."
